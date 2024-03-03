@@ -17,20 +17,42 @@ from torchsummary import summary
 from pytorch_lightning import Trainer
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
-
+from losses import choose_loss_function
+    
 class FGCM_Model(pl.LightningModule):
-    def __init__(self, base_model_name, num_classes, optimizer_type, learning_rate=1e-3, weight_decay=0.0):
+    def __init__(self, cfg, num_classes):
         super().__init__()
         self.save_hyperparameters()  
-        self.base_model = timm.create_model(base_model_name, pretrained=True)
-        self.embedding_size = self.base_model.num_features  # Get the number of features (embedding size) from the base model
-        self.base_model = nn.Sequential(*list(self.base_model.children())[:-1]) # Remove the classification head
-        self.learning_rate = learning_rate
-        self.criterion = nn.CrossEntropyLoss()
+        self.base_model = timm.create_model(cfg.backbone, pretrained=True)
+        self.embedding_size = self.base_model.num_features  
+        self.base_model = nn.Sequential(*list(self.base_model.children())[:-1]) 
+        self.cfg = cfg
+        self.criterion = choose_loss_function(cfg)
         
+        # If unfreeze_last_n is -1, make all layers trainable
+        if cfg.unfreeze_last_n == -1:
+            print("=> All layers are trainable.")
+            for param in self.base_model.parameters():
+                param.requires_grad = True
+        else:
+            # Freeze all layers initially
+            if cfg.unfreeze_last_n == 0:
+                print("=> All layers are frozen.")
+            else:
+                print(f"=> Unfreezing the last {cfg.unfreeze_last_n} layers.")
+            for param in self.base_model.parameters():
+                param.requires_grad = False
+
+            # Unfreeze the last n layers
+            num_layers = len(list(self.base_model.children()))
+            for i, child in enumerate(self.base_model.children()):
+                if i >= num_layers - cfg.unfreeze_last_n:
+                    for param in child.parameters():
+                        param.requires_grad = True
+                        
         self.projection = nn.Sequential(
-            nn.Linear(self.embedding_size, num_classes),            # Linear layer
-            nn.BatchNorm1d(num_classes)) 
+            nn.Linear(self.embedding_size, num_classes),           # Linear layer
+        ) 
 
     def forward(self, x):
         x = self.base_model(x)
@@ -41,9 +63,9 @@ class FGCM_Model(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
-        loss = self.criterion(logits, y)
-        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        return loss
+        train_loss = self.criterion(logits, y)
+        self.log('train_loss', train_loss, on_epoch=True, prog_bar=True, logger=True)
+        return train_loss
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
@@ -51,9 +73,9 @@ class FGCM_Model(pl.LightningModule):
         loss = self.criterion(logits, y)
         preds = torch.argmax(logits, dim=1)
         acc = torch.tensor(torch.sum(preds == y).item() / len(preds), device=self.device)
-        self.log('val_loss', loss, prog_bar=True, logger=True)
-        self.log('val_acc', acc, prog_bar=True, logger=True)
-        return {'val_loss': loss, 'val_acc': acc}
+        self.log('val_loss', loss, on_epoch=True, prog_bar=True, logger=True)
+        self.log('val_acc', acc, on_epoch=True, prog_bar=True, logger=True)
+        return {'val_loss': loss, 'test_acc': acc}
 
     def test_step(self, batch, batch_idx):
         x, y = batch
@@ -61,14 +83,32 @@ class FGCM_Model(pl.LightningModule):
         loss = self.criterion(logits, y)
         preds = torch.argmax(logits, dim=1)
         acc = torch.tensor(torch.sum(preds == y).item() / len(preds), device=self.device)
-        self.log('test_loss', loss, prog_bar=True, logger=True)
-        self.log('test_acc', acc, prog_bar=True, logger=True)
+        self.log('test_loss', loss, on_epoch=True, prog_bar=True, logger=True)
+        self.log('test_acc', acc, on_epoch=True, prog_bar=True, logger=True)
         return {'test_loss': loss, 'test_acc': acc}
 
-    def configure_optimizers(self):
+    def configure_optimizers(self):        
         optimizer = {
-            'Adam': torch.optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=self.hparams.weight_decay),
-            'SGD': torch.optim.SGD(self.parameters(), lr=self.learning_rate, weight_decay=self.hparams.weight_decay)
-        }[self.hparams.optimizer_type]
-        return optimizer
+            'Adam': torch.optim.Adam(self.parameters(), lr=float(self.cfg.learning_rate), weight_decay=float(self.cfg.weight_decay)),
+            'SGD': torch.optim.SGD(self.parameters(), lr=float(self.cfg.learning_rate), weight_decay=float(self.cfg.weight_decay)),
+            'AdamW': torch.optim.AdamW(self.parameters(), lr=float(self.cfg.learning_rate), weight_decay=float(self.cfg.weight_decay))
+        }[self.cfg.optimizer]
+        print(f"=> Using '{self.cfg.optimizer}' optimizer.")
+        
+        scheduler = {
+            'CosineAnnealing': {
+                'scheduler': torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=0),
+                'interval': 'epoch',
+                'frequency': 1
+            },
+            'ReduceLROnPlateau': {
+                'scheduler': torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=self.cfg.patience, min_lr=0, factor=self.cfg.decay_factor),
+                'monitor': 'val_loss',  
+                'interval': 'epoch',
+                'frequency': 1
+            }
+        }[self.cfg.scheduler]
+        print(f"=> Using '{self.cfg.scheduler}' scheduler.")
+        
+        return [optimizer], [scheduler] 
     

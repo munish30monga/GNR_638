@@ -6,6 +6,8 @@ import pytorch_lightning as pl
 from pathlib import Path
 import numpy as np
 from prettytable import PrettyTable
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
 class CUB_Dataset(Dataset):
     def __init__(self, dataset_dir, split='train', transform=None, split_ratio=0.2):
@@ -39,9 +41,11 @@ class CUB_Dataset(Dataset):
         path = self.dataset_dir / 'CUB_200_2011' / 'images' / sample.filepath
         target = sample.target - 1  # Targets start at 1 by default, so shift to 0
         img = Image.open(path).convert('RGB')
+        img = np.array(img)
 
-        if self.transform is not None:
-            img = self.transform(img)
+        if self.transform:
+            augmented = self.transform(image=img)
+            img = augmented['image']
 
         return img, target
 
@@ -51,21 +55,22 @@ class CUB_DataModule(pl.LightningDataModule):
         self.dataset_dir = Path(dataset_dir)
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
-
+        self.transforms = get_transforms()
+        
     def setup(self, stage=None):
         if stage in ('fit', None):
-            self.train_dataset = CUB_Dataset(self.dataset_dir, split='train', transform=self.transform)
+            self.train_dataset = CUB_Dataset(self.dataset_dir, split='train', transform=self.transforms['train'])
+        if stage in ('validate', None):
+            self.val_dataset = CUB_Dataset(self.dataset_dir, split='test', transform=self.transforms['val'])
         if stage in ('test', None):
-            self.test_dataset = CUB_Dataset(self.dataset_dir, split='test', transform=self.transform)
+            self.test_dataset = CUB_Dataset(self.dataset_dir, split='test', transform=self.transforms['test'])
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
 
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers)
+    
     def test_dataloader(self):
         return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers)
     
@@ -102,3 +107,28 @@ def dataset_summary(dataset_dir):
         'num_classes':num_classes
     }
     return dataset_summary_dict
+
+def get_transforms():
+    transforms = {
+        'train': A.Compose([
+            A.Resize(224, 224),
+            # A.HorizontalFlip(),
+            # A.ColorJitter(brightness=0.5, contrast=0.5), 
+            # A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),    
+            # A.GaussianBlur(blur_limit=(3, 7), p=0.5),                                        
+            # A.CoarseDropout(max_holes=8, max_height=25, max_width=25, fill_value=0, p=0.5),
+            A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ToTensorV2(),
+        ]),
+        'val': A.Compose([
+            A.Resize(224, 224),
+            A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ToTensorV2(),
+        ]),
+        'test': A.Compose([
+            A.Resize(224, 224),
+            A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ToTensorV2(),
+        ])
+    }
+    return transforms

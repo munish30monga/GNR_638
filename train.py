@@ -15,34 +15,45 @@ import random
 from thop import clever_format
 from torchsummary import summary
 from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import WandbLogger
 import wandb
+from model import FGCM_Model
 
-def train_model(cfg , model, data_module, max_epochs, accelerator, devices, project_name):
+torch.set_float32_matmul_precision('medium') 
 
-    # Logger
-    wandb_logger = WandbLogger(project='GNR_638', log_model='all', name=f'{project_name}')
-        
-    # Model checkpoint callback to save the best model based on validation loss
+def train_model(cfg , model, data_module, max_epochs, accelerator, devices, logger):  
+    # Callbacks      
     checkpoint_callback = ModelCheckpoint(
-        monitor='test_loss',
-        filename='model-{epoch:02d}-{test_loss:.2f}',
+        dirpath='./checkpoints',
+        monitor='val_acc',
+        filename='{cfg.backbone}_{epoch:02d}_{acc:.2f}',
         save_top_k=1,
-        mode='min',
+        mode='max',
+        verbose=True,
     )
+    LR_monitor = LearningRateMonitor(logging_interval='step', log_weight_decay=True)
     
     # Initialize a trainer
     trainer = Trainer(
         max_epochs=max_epochs,
         log_every_n_steps=1,
-        callbacks=[checkpoint_callback],
-        logger=wandb_logger,
+        callbacks = [checkpoint_callback, LR_monitor],
+        logger=logger,
         accelerator=accelerator,
         devices=devices,
     )
-    
+
     # Train the model
-    trainer.fit(model, train_dataloader=data_module.train_dataloader(), val_dataloaders=data_module.test_dataloader())
+    trainer.fit(model, datamodule=data_module)
     
-    return trainer, model
+    # Load the best model saved by the checkpoint callback
+    best_model_path = checkpoint_callback.best_model_path
+    print(f"Loading best model from: {best_model_path}")
+    if best_model_path:
+        best_model = FGCM_Model.load_from_checkpoint(best_model_path)
+    
+    # Run the test using the best model
+    trainer.test(best_model, datamodule=data_module)
+    
+    return trainer, best_model
