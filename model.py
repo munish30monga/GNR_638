@@ -10,6 +10,7 @@ import numpy as np
 from prettytable import PrettyTable
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import timm
 import random
 from thop import clever_format
@@ -28,6 +29,10 @@ class FGCM_Model(pl.LightningModule):
         self.base_model = nn.Sequential(*list(self.base_model.children())[:-1]) 
         self.cfg = cfg
         self.criterion = choose_loss_function(cfg)
+        
+        self.projection = nn.Sequential(
+            nn.Linear(self.embedding_size, num_classes),           # Linear layer
+        ) 
         
         # If unfreeze_last_n is -1, make all layers trainable
         if cfg.unfreeze_last_n == -1:
@@ -50,27 +55,23 @@ class FGCM_Model(pl.LightningModule):
                     for param in child.parameters():
                         param.requires_grad = True
                         
-        self.projection = nn.Sequential(
-            nn.Linear(self.embedding_size, num_classes),           # Linear layer
-        ) 
-
     def forward(self, x):
         x = self.base_model(x)
         x = x.view(x.size()[0], -1)
         x = self.projection(x)
         return x
-
+    
     def training_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
-        train_loss = self.criterion(logits, y)
+        train_loss = self.criterion(F.softmax(logits, dim=1), y) if self.cfg.loss_function == 'FocalLoss' else self.criterion(logits, y)
         self.log('train_loss', train_loss, on_epoch=True, prog_bar=True, logger=True)
         return train_loss
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
-        loss = self.criterion(logits, y)
+        loss = self.criterion(F.softmax(logits, dim=1), y) if self.cfg.loss_function == 'FocalLoss' else self.criterion(logits, y)
         preds = torch.argmax(logits, dim=1)
         acc = torch.tensor(torch.sum(preds == y).item() / len(preds), device=self.device)
         self.log('val_loss', loss, on_epoch=True, prog_bar=True, logger=True)
@@ -80,7 +81,7 @@ class FGCM_Model(pl.LightningModule):
     def test_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
-        loss = self.criterion(logits, y)
+        loss = self.criterion(F.softmax(logits, dim=1), y) if self.cfg.loss_function == 'FocalLoss' else self.criterion(logits, y)
         preds = torch.argmax(logits, dim=1)
         acc = torch.tensor(torch.sum(preds == y).item() / len(preds), device=self.device)
         self.log('test_loss', loss, on_epoch=True, prog_bar=True, logger=True)

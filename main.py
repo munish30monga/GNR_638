@@ -12,7 +12,7 @@ from dataloader import CUB_DataModule, dataset_summary
 from model import FGCM_Model
 from pytorch_lightning.loggers import WandbLogger
 
-project_name = 'no_augmentation'
+project_name = ''
 wandb.init(mode='dryrun')
 
 if __name__ == "__main__":
@@ -29,7 +29,7 @@ if __name__ == "__main__":
     cfg = yaml.safe_load(open(args.config_file, "r"))
     cfg = munch.munchify(cfg)
     
-    wandb.init(name=f'{cfg.backbone}_{project_name}')
+    wandb.init(name=f'{cfg.backbone}_{cfg.loss_function}_aug_{cfg.use_augm}_ls_{cfg.label_smoothing}_{project_name}')
     wandb.config.update(cfg)
     wandb.save(f'./configs/aio.yaml')
 
@@ -37,13 +37,13 @@ if __name__ == "__main__":
     
     logger = WandbLogger(project='GNR_638', log_model='all', name=f'{project_name}')
     dataset_summary_dict = dataset_summary(cfg.dataset_dir)
-    data_module = CUB_DataModule(cfg.dataset_dir, cfg.batch_size, cfg.num_workers)
+    data_module = CUB_DataModule(cfg)
     data_module.setup()
     num_classes = dataset_summary_dict['num_classes']
     
     model = FGCM_Model(cfg, num_classes)
     print(f"=> Fine-Grained Classification Model is build using '{cfg.backbone}' as base model.")
-    
+ 
     # Training Model
     trainer, best_model = train_model(cfg, model, data_module, max_epochs=cfg.epochs, accelerator='gpu', devices=1, logger=logger)
     

@@ -50,16 +50,17 @@ class CUB_Dataset(Dataset):
         return img, target
 
 class CUB_DataModule(pl.LightningDataModule):
-    def __init__(self, dataset_dir, batch_size=32, num_workers=8):
+    def __init__(self, cfg):
         super().__init__()
-        self.dataset_dir = Path(dataset_dir)
-        self.batch_size = batch_size
-        self.num_workers = num_workers
+        self.dataset_dir = Path(cfg.dataset_dir)
+        self.batch_size = cfg.batch_size
+        self.num_workers = cfg.num_workers
         self.transforms = get_transforms()
+        self.cfg = cfg
         
     def setup(self, stage=None):
         if stage in ('fit', None):
-            self.train_dataset = CUB_Dataset(self.dataset_dir, split='train', transform=self.transforms['train'])
+            self.train_dataset = CUB_Dataset(self.dataset_dir, split='train', transform=self.transforms['train'] if self.cfg.use_augm else self.transforms['val'])
         if stage in ('validate', None):
             self.val_dataset = CUB_Dataset(self.dataset_dir, split='test', transform=self.transforms['val'])
         if stage in ('test', None):
@@ -112,11 +113,12 @@ def get_transforms():
     transforms = {
         'train': A.Compose([
             A.Resize(224, 224),
-            # A.HorizontalFlip(),
-            # A.ColorJitter(brightness=0.5, contrast=0.5), 
-            # A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),    
-            # A.GaussianBlur(blur_limit=(3, 7), p=0.5),                                        
-            # A.CoarseDropout(max_holes=8, max_height=25, max_width=25, fill_value=0, p=0.5),
+            A.HorizontalFlip(),
+            A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=15, p=0.5),
+            A.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1, p=0.5),
+            A.RandomBrightnessContrast(brightness_limit=0.1, contrast_limit=0.1, p=0.5),
+            A.GaussianBlur(blur_limit=(3, 7), p=0.5),                                        
+            A.CoarseDropout(max_holes=4, max_height=15, max_width=15, fill_value=0, p=0.3),
             A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
             ToTensorV2(),
         ]),
