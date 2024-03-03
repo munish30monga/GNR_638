@@ -1,0 +1,13 @@
+backbone: 'mobilenet3_small_050'
+dataset_dir: './datasets/cub'
+batch_size: 32
+num_workers: 8
+optimizer: 'Adam'
+random_seed: 42
+epochs: 20
+learning_rate: 0.001
+base_model: 'resnet18'
+accelerator: 'gpu'
+devices: 1
+optimizer_type: 'Adam'
+weight_decay: 0.0001
