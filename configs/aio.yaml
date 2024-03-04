@@ -2,17 +2,16 @@ backbone: 'efficientnet_b0' # 'efficientnet_b0', 'resnet18', 'dpn48b', 'mobilene
 pretrained: True
 unfreeze_last_n: -1
 dataset_dir: './datasets/cub'
-batch_size: 32
+batch_size: 64
 num_workers: 8
-optimizer: 'AdamW' # 'Adam', 'SGD', 'AdamW'
+optimizer: 'Adam' # 'Adam', 'SGD', 'AdamW'
 scheduler: 'CosineAnnealing' # 'CosineAnnealing', 'ReduceLROnPlateau'
-epochs: 100
-learning_rate: 1e-4
-weight_decay: 1e-5
+epochs: 2
+learning_rate: 1e-3
+weight_decay: 1e-4
 patience: 5
 decay_factor: 0.5
 loss_function: 'CrossEntropy' # 'CrossEntropy', 'FocalLoss'
-label_smoothing: 0.9
-gamma: 3
+label_smoothing: 0.3
+gamma: 1
 use_augm: False
-use_spatial_attention: False

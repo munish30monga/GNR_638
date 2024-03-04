@@ -2,7 +2,7 @@ import wandb
 import argparse
 import yaml
 import munch
-from train import train_model
+from train import train_model, test_model
 from dataloader import CUB_DataModule, dataset_summary
 from model import FGCM_Model
 from lightning.pytorch.loggers import WandbLogger
@@ -40,7 +40,10 @@ if __name__ == "__main__":
     print(f"=> Fine-Grained Classification Model is build using '{cfg.backbone}' as base model.")
     
     # Training Model
-    trainer, best_model = train_model(cfg, model, data_module, max_epochs=cfg.epochs, accelerator='gpu', devices=1, logger=logger)
+    trainer, best_model_path = train_model(cfg, model, data_module, logger)
+    
+    # Testing Model
+    test_model(best_model_path, data_module)
     
     wandb.finish()
     

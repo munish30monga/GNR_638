@@ -11,26 +11,17 @@ class FGCM_Model(L.LightningModule):
         self.cfg = cfg
         self.learning_rate = cfg.learning_rate
         self.save_hyperparameters()  
-        self.base_model = timm.create_model(self.cfg.backbone, pretrained=cfg.pretrained)
-        self.embedding_size = self.base_model.num_features  
-        if 'efficientnet' in self.cfg.backbone and self.cfg.use_spatial_attention:
-            self.base_model = nn.Sequential(*list(self.base_model.children())[:-2])
-            self.spatial_attention = SpatialAttentionModule(kernel_size=7)
-            self.pooling = nn.AdaptiveAvgPool2d(1)
-            self.projection = nn.Sequential(
-                # nn.Dropout(0.25),  # Add dropout before the dense layer as per the new architecture
-                nn.Linear(self.embedding_size, num_classes),  # Linear layer
-                # nn.Dropout(0.5),   
-            )
-        else:
-            self.base_model = nn.Sequential(*list(self.base_model.children())[:-1]) 
-            self.projection = nn.Sequential(
-                # nn.Dropout(0.25),  # Add dropout before the dense layer as per the new architecture
-                nn.Linear(self.embedding_size, num_classes),           # Linear laye
-                # nn.Dropout(0.5),   
-            )
-        self.criterion = choose_loss_function(self.cfg)
-        
+        self.base_model = timm.create_model(self.cfg.backbone, pretrained=cfg.pretrained, num_classes=num_classes)
+        # self.base_model = timm.create_model(self.cfg.backbone, pretrained=cfg.pretrained, features_only=True, num_classes=num_classes)
+        self.criterion = choose_loss_function(self.cfg, num_classes)
+        # feature_channels = self.base_model.feature_info.channels()
+        # self.fpn = FeaturePyramidNetwork(
+        #     in_channels_list=feature_channels,
+        #     out_channels=256,
+        # )
+        # self.projection = nn.Linear(256 * len(feature_channels), num_classes)
+        # self.projection.apply(self.init_weights)
+             
         # If unfreeze_last_n is -1, make all layers trainable
         if self.cfg.unfreeze_last_n == -1:
             print("=> All layers are trainable.")
@@ -51,16 +42,30 @@ class FGCM_Model(L.LightningModule):
                 if i >= num_layers - self.cfg.unfreeze_last_n:
                     for param in child.parameters():
                         param.requires_grad = True
-                            
+    
+    def init_weights(self, layer):
+        if isinstance(layer, nn.Linear):
+            torch.nn.init.kaiming_normal_(layer.weight)   
+                        
     def forward(self, x):
+        # features = self.base_model(x)
+        
+        # # Create an OrderedDict for FPN input
+        # fpn_input = OrderedDict([
+        #     (f'feat{i}', feature) for i, feature in enumerate(features)
+        # ])
+        
+        # # FPN Output
+        # fpn_output = self.fpn(fpn_input)
+        
+        # combined_features = torch.cat([torch.nn.functional.adaptive_avg_pool2d(output, (1, 1)) for output in fpn_output.values()], dim=1)
+        # combined_features = combined_features.view(combined_features.size(0), -1)
+        
+        # # Final classification
+        # logits = self.projection(combined_features)
+        
+        # return logits
         x = self.base_model(x)
-        if 'efficientnet' in self.cfg.backbone and self.cfg.use_spatial_attention:
-            x = self.spatial_attention(x) * x 
-            x = self.pooling(x)  
-            x = torch.flatten(x, 1)  
-        else:
-            x = x.view(x.size()[0], -1)
-        x = self.projection(x)
         return x
         
     def training_step(self, batch, batch_idx):
@@ -75,7 +80,7 @@ class FGCM_Model(L.LightningModule):
         logits = self(x)
         loss = self.criterion(F.softmax(logits, dim=1), y) if self.cfg.loss_function == 'FocalLoss' else self.criterion(logits, y)
         preds = torch.argmax(logits, dim=1)
-        acc = torch.tensor(torch.sum(preds == y).item() / len(preds), device=self.device)
+        acc = torch.tensor(torch.sum(preds == y).item() / len(preds), device=self.device)*100
         self.log('val_loss', loss, on_epoch=True, prog_bar=True, logger=True)
         self.log('val_acc', acc, on_epoch=True, prog_bar=True, logger=True)
         return {'val_loss': loss, 'test_acc': acc}
@@ -85,7 +90,7 @@ class FGCM_Model(L.LightningModule):
         logits = self(x)
         loss = self.criterion(F.softmax(logits, dim=1), y) if self.cfg.loss_function == 'FocalLoss' else self.criterion(logits, y)
         preds = torch.argmax(logits, dim=1)
-        acc = torch.tensor(torch.sum(preds == y).item() / len(preds), device=self.device)
+        acc = torch.tensor(torch.sum(preds == y).item() / len(preds), device=self.device)*100
         self.log('test_loss', loss, on_epoch=True, prog_bar=True, logger=True)
         self.log('test_acc', acc, on_epoch=True, prog_bar=True, logger=True)
         return {'test_loss': loss, 'test_acc': acc}
@@ -94,13 +99,13 @@ class FGCM_Model(L.LightningModule):
         optimizer = {
             'Adam': torch.optim.Adam(self.parameters(), lr=float(self.learning_rate)),
             'SGD': torch.optim.SGD(self.parameters(), lr=float(self.learning_rate)),
-            'AdamW': torch.optim.AdamW(self.parameters(), lr=float(self.learning_rate))
+            'AdamW': torch.optim.AdamW(self.parameters(), lr=float(self.learning_rate), weight_decay=float(self.cfg.weight_decay)),
         }[self.cfg.optimizer]
         print(f"=> Using '{self.cfg.optimizer}' optimizer.")
         
         scheduler = {
             'CosineAnnealing': {
-                'scheduler': torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=0),
+                'scheduler': torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=40, eta_min=0),
                 'interval': 'epoch',
                 'frequency': 1
             },
@@ -114,20 +119,3 @@ class FGCM_Model(L.LightningModule):
         print(f"=> Using '{self.cfg.scheduler}' scheduler.")
         
         return [optimizer], [scheduler]
-
-class SpatialAttentionModule(nn.Module):
-    def __init__(self, kernel_size=7):
-        super(SpatialAttentionModule, self).__init__()
-        assert kernel_size in (3, 7), 'kernel size must be 3 or 7'
-        padding = 3 if kernel_size == 7 else 1
-        
-        self.conv1 = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
-        self.sigmoid = nn.Sigmoid()
-        
-    def forward(self, x):
-        # Compute the spatial attention scores
-        avg_out = torch.mean(x, dim=1, keepdim=True)
-        max_out, _ = torch.max(x, dim=1, keepdim=True)
-        x = torch.cat([avg_out, max_out], dim=1)
-        x = self.conv1(x)
-        return self.sigmoid(x)

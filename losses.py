@@ -3,29 +3,80 @@ import torch.nn as nn
 import torch.nn.functional as F
 from focal_loss.focal_loss import FocalLoss
 
-# class FocalLoss(nn.Module):
-#     def __init__(self, alpha=1, gamma=2, reduction='mean'):
-#         super(FocalLoss, self).__init__()
-#         self.alpha = alpha
-#         self.gamma = gamma
-#         self.reduction = reduction
+class FocalLossWithSmoothing(nn.Module):
+    def __init__(
+            self,
+            num_classes: int,
+            gamma: int = 1,
+            lb_smooth: float = 0.1,
+            size_average: bool = True,
+            ignore_index: int = None,
+            alpha: float = None):
+  
+        super(FocalLossWithSmoothing, self).__init__()
+        self._num_classes = num_classes
+        self._gamma = gamma
+        self._lb_smooth = lb_smooth
+        self._size_average = size_average
+        self._ignore_index = ignore_index
+        self._log_softmax = nn.LogSoftmax(dim=1)
+        self._alpha = alpha
 
-#     def forward(self, inputs, targets):
-#         BCE_loss = F.cross_entropy(inputs, targets, reduction='none')
-#         pt = torch.exp(-BCE_loss)
-#         F_loss = self.alpha * (1-pt)**self.gamma * BCE_loss
+        if self._num_classes <= 1:
+            raise ValueError('The number of classes must be 2 or higher')
+        if self._gamma < 0:
+            raise ValueError('Gamma must be 0 or higher')
+        if self._alpha is not None:
+            if self._alpha <= 0 or self._alpha >= 1:
+                raise ValueError('Alpha must be 0 <= alpha <= 1')
 
-#         if self.reduction == 'mean':
-#             return torch.mean(F_loss)
-#         elif self.reduction == 'sum':
-#             return torch.sum(F_loss)
-#         else:
-#             return F_loss
+    def forward(self, logits, label):
+        """
+        :param logits: (batch_size, class, height, width)
+        :param label:
+        :return:
+        """
+        logits = logits.float()
+        difficulty_level = self._estimate_difficulty_level(logits, label)
+
+        with torch.no_grad():
+            label = label.clone().detach()
+            if self._ignore_index is not None:
+                ignore = label.eq(self._ignore_index)
+                label[ignore] = 0
+            lb_pos, lb_neg = 1. - self._lb_smooth, self._lb_smooth / (self._num_classes - 1)
+            lb_one_hot = torch.empty_like(logits).fill_(
+                lb_neg).scatter_(1, label.unsqueeze(1), lb_pos).detach()
+        logs = self._log_softmax(logits)
+        loss = -torch.sum(difficulty_level * logs * lb_one_hot, dim=1)
+        if self._ignore_index is not None:
+            loss[ignore] = 0
+        return loss.mean()
+
+    def _estimate_difficulty_level(self, logits, label):
+        """
+        :param logits:
+        :param label:
+        :return:
+        """
+        one_hot_key = torch.nn.functional.one_hot(label, num_classes=self._num_classes)
+        if len(one_hot_key.shape) == 4:
+            one_hot_key = one_hot_key.permute(0, 3, 1, 2)
+        if one_hot_key.device != logits.device:
+            one_hot_key = one_hot_key.to(logits.device)
+        pt = one_hot_key * F.softmax(logits, dim=1)
+        difficulty_level = torch.pow(1 - pt, self._gamma)
+        return difficulty_level
         
-def choose_loss_function(cfg):
+def choose_loss_function(cfg, num_classes):
     if cfg.label_smoothing and cfg.loss_function == 'CrossEntropy':
         return nn.CrossEntropyLoss(label_smoothing=cfg.label_smoothing)
+    
     if cfg.loss_function == 'CrossEntropy':
         return nn.CrossEntropyLoss()
+    
+    if cfg.loss_function == 'FocalLoss' and cfg.label_smoothing:
+        return FocalLossWithSmoothing(num_classes=num_classes, gamma=cfg.gamma, lb_smooth=cfg.label_smoothing)
+    
     if cfg.loss_function == 'FocalLoss':
         return FocalLoss(gamma=cfg.gamma)
