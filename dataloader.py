@@ -2,7 +2,7 @@ import pandas as pd
 from PIL import Image
 from torchvision import transforms
 from torch.utils.data import Dataset, DataLoader
-import pytorch_lightning as pl
+import lightning as L
 from pathlib import Path
 import numpy as np
 from prettytable import PrettyTable
@@ -49,7 +49,7 @@ class CUB_Dataset(Dataset):
 
         return img, target
 
-class CUB_DataModule(pl.LightningDataModule):
+class CUB_DataModule(L.LightningDataModule):
     def __init__(self, cfg):
         super().__init__()
         self.dataset_dir = Path(cfg.dataset_dir)

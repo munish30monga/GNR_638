@@ -1,8 +1,3 @@
-import os
-import pandas as pd
-from PIL import Image
-import torch
-import timm
 import wandb
 import argparse
 import yaml
@@ -10,9 +5,9 @@ import munch
 from train import train_model
 from dataloader import CUB_DataModule, dataset_summary
 from model import FGCM_Model
-from pytorch_lightning.loggers import WandbLogger
+from lightning.pytorch.loggers import WandbLogger
 
-project_name = ''
+project_name = 'no_droput'
 wandb.init(mode='dryrun')
 
 if __name__ == "__main__":
@@ -43,7 +38,7 @@ if __name__ == "__main__":
     
     model = FGCM_Model(cfg, num_classes)
     print(f"=> Fine-Grained Classification Model is build using '{cfg.backbone}' as base model.")
- 
+    
     # Training Model
     trainer, best_model = train_model(cfg, model, data_module, max_epochs=cfg.epochs, accelerator='gpu', devices=1, logger=logger)
     
