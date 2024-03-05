@@ -77,14 +77,14 @@ class FGCM_Model(L.LightningModule):
     def training_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
-        train_loss = self.criterion(logits, y)
+        train_loss = self.criterion(F.softmax(logits, dim=1), y) if self.cfg.loss_function == 'FocalLoss' else self.criterion(logits, y)
         self.log('train_loss', train_loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         return train_loss
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
-        loss = self.criterion(logits, y)
+        loss = self.criterion(F.softmax(logits, dim=1), y) if self.cfg.loss_function == 'FocalLoss' else self.criterion(logits, y)
         preds = torch.argmax(logits, dim=1)
         acc = torch.tensor(torch.sum(preds == y).item() / len(preds), device=self.device)*100
         self.log('val_loss', loss, on_epoch=True, prog_bar=True, logger=True)
@@ -94,7 +94,7 @@ class FGCM_Model(L.LightningModule):
     def test_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
-        loss = self.criterion(logits, y) 
+        loss = self.criterion(F.softmax(logits, dim=1), y) if self.cfg.loss_function == 'FocalLoss' else self.criterion(logits, y) 
         preds = torch.argmax(logits, dim=1)
         acc = torch.tensor(torch.sum(preds == y).item() / len(preds), device=self.device)*100
         self.log('test_loss', loss, on_epoch=True, prog_bar=True, logger=True)
