@@ -41,13 +41,14 @@ def train_model(cfg, model, data_module, logger):
        
     return trainer, best_model_path
 
-def test_model(best_model_path, data_module):
+def test_model(best_model_path, data_module, logger):
     print(f"Loading best model from {best_model_path}")
 
     # Initialize trainer
     trainer = Trainer(
         accelerator='gpu',
         devices=1,
+        logger=logger,
     )
     
     # Load the best model

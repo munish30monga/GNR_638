@@ -1,9 +1,11 @@
 import lightning as L
 import torch.nn as nn
 import torch.nn.functional as F
+from torchvision.ops import FeaturePyramidNetwork
 import timm
 import torch
 from losses import choose_loss_function
+from collections import OrderedDict
     
 class FGCM_Model(L.LightningModule):
     def __init__(self, cfg, num_classes):
@@ -11,17 +13,20 @@ class FGCM_Model(L.LightningModule):
         self.cfg = cfg
         self.learning_rate = cfg.learning_rate
         self.save_hyperparameters()  
-        self.base_model = timm.create_model(self.cfg.backbone, pretrained=cfg.pretrained, num_classes=num_classes)
-        # self.base_model = timm.create_model(self.cfg.backbone, pretrained=cfg.pretrained, features_only=True, num_classes=num_classes)
+        if cfg.use_fpn:
+            self.base_model = timm.create_model(self.cfg.backbone, pretrained=cfg.pretrained, features_only=True, num_classes=num_classes)
+            feature_channels = self.base_model.feature_info.channels()
+            self.fpn = FeaturePyramidNetwork(
+                in_channels_list=feature_channels,
+                out_channels=256,
+            )
+            self.projection = nn.Linear(256 * len(feature_channels), num_classes)
+            # self.projection.apply(self.init_weights)
+        else:
+            self.base_model = timm.create_model(self.cfg.backbone, pretrained=cfg.pretrained, num_classes=num_classes)
+            
         self.criterion = choose_loss_function(self.cfg, num_classes)
-        # feature_channels = self.base_model.feature_info.channels()
-        # self.fpn = FeaturePyramidNetwork(
-        #     in_channels_list=feature_channels,
-        #     out_channels=256,
-        # )
-        # self.projection = nn.Linear(256 * len(feature_channels), num_classes)
-        # self.projection.apply(self.init_weights)
-             
+        
         # If unfreeze_last_n is -1, make all layers trainable
         if self.cfg.unfreeze_last_n == -1:
             print("=> All layers are trainable.")
@@ -48,37 +53,38 @@ class FGCM_Model(L.LightningModule):
             torch.nn.init.kaiming_normal_(layer.weight)   
                         
     def forward(self, x):
-        # features = self.base_model(x)
-        
-        # # Create an OrderedDict for FPN input
-        # fpn_input = OrderedDict([
-        #     (f'feat{i}', feature) for i, feature in enumerate(features)
-        # ])
-        
-        # # FPN Output
-        # fpn_output = self.fpn(fpn_input)
-        
-        # combined_features = torch.cat([torch.nn.functional.adaptive_avg_pool2d(output, (1, 1)) for output in fpn_output.values()], dim=1)
-        # combined_features = combined_features.view(combined_features.size(0), -1)
-        
-        # # Final classification
-        # logits = self.projection(combined_features)
-        
-        # return logits
-        x = self.base_model(x)
-        return x
+        if self.cfg.use_fpn:
+            features = self.base_model(x)
+            
+            # Create an OrderedDict for FPN input
+            fpn_input = OrderedDict([
+                (f'feat{i}', feature) for i, feature in enumerate(features)
+            ])
+            
+            # FPN Output
+            fpn_output = self.fpn(fpn_input)
+            
+            combined_features = torch.cat([torch.nn.functional.adaptive_avg_pool2d(output, (1, 1)) for output in fpn_output.values()], dim=1)
+            combined_features = combined_features.view(combined_features.size(0), -1)
+            
+            # Final classification
+            logits = self.projection(combined_features)
+        else:
+            x = self.base_model(x)
+            logits = x / self.cfg.temperature
+        return logits
         
     def training_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
-        train_loss = self.criterion(F.softmax(logits, dim=1), y) if self.cfg.loss_function == 'FocalLoss' else self.criterion(logits, y)
+        train_loss = self.criterion(logits, y)
         self.log('train_loss', train_loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
         return train_loss
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
-        loss = self.criterion(F.softmax(logits, dim=1), y) if self.cfg.loss_function == 'FocalLoss' else self.criterion(logits, y)
+        loss = self.criterion(logits, y)
         preds = torch.argmax(logits, dim=1)
         acc = torch.tensor(torch.sum(preds == y).item() / len(preds), device=self.device)*100
         self.log('val_loss', loss, on_epoch=True, prog_bar=True, logger=True)
@@ -88,7 +94,7 @@ class FGCM_Model(L.LightningModule):
     def test_step(self, batch, batch_idx):
         x, y = batch
         logits = self(x)
-        loss = self.criterion(F.softmax(logits, dim=1), y) if self.cfg.loss_function == 'FocalLoss' else self.criterion(logits, y)
+        loss = self.criterion(logits, y) 
         preds = torch.argmax(logits, dim=1)
         acc = torch.tensor(torch.sum(preds == y).item() / len(preds), device=self.device)*100
         self.log('test_loss', loss, on_epoch=True, prog_bar=True, logger=True)
