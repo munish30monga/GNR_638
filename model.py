@@ -25,7 +25,7 @@ class FGCM_Model(L.LightningModule):
         else:
             self.base_model = timm.create_model(self.cfg.backbone, pretrained=cfg.pretrained, num_classes=num_classes)
             
-        self.criterion = choose_loss_function(self.cfg, num_classes)
+        self.criterion = choose_loss_function(self.cfg)
         
         # If unfreeze_last_n is -1, make all layers trainable
         if self.cfg.unfreeze_last_n == -1:
